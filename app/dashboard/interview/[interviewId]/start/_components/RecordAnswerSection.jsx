@@ -58,91 +58,175 @@ const RecordAnswerSection = ({
   };
 
   const UpdateUserAnswer = async () => {
+    if (!userAnswer || userAnswer.trim().length < 10) {
+      toast.error("Please provide a longer answer (at least 10 characters)");
+      setLoading(false);
+      return;
+    }
+
     console.log(userAnswer, "########");
     setLoading(true);
-    const feedbackPrompt =
-      "Question:" +
-      mockInterviewQuestion[activeQuestionIndex]?.question +
-      ", User Answer:" +
-      userAnswer +
-      ",Depends on question and user answer for given interview question " +
-      " please give use rating for answer and feedback as area of improvement if any" +
-      " in just 3 to 5 lines to improve it in JSON format with rating field and feedback field";
-    console.log(
-      "🚀 ~ file: RecordAnswerSection.jsx:38 ~ SaveUserAnswer ~ feedbackPrompt:",
-      feedbackPrompt
-    );
-    const result = await chatSession.sendMessage(feedbackPrompt);
-    console.log(
-      "🚀 ~ file: RecordAnswerSection.jsx:46 ~ SaveUserAnswer ~ result:",
-      result
-    );
-    const mockJsonResp = result.response
-      .text()
-      .replace("```json", "")
-      .replace("```", "");
+    
+    const question = mockInterviewQuestion[activeQuestionIndex]?.question;
+    const correctAnswer = mockInterviewQuestion[activeQuestionIndex]?.answer;
+    
+    const feedbackPrompt = `You are an expert interview evaluator. Evaluate the following interview answer.
 
-    console.log(
-      "🚀 ~ file: RecordAnswerSection.jsx:47 ~ SaveUserAnswer ~ mockJsonResp:",
-      mockJsonResp
-    );
-    const JsonfeedbackResp = JSON.parse(mockJsonResp);
-    const resp = await db.insert(UserAnswer).values({
-      mockIdRef: interviewData?.mockId,
-      question: mockInterviewQuestion[activeQuestionIndex]?.question,
-      correctAns: mockInterviewQuestion[activeQuestionIndex]?.answer,
-      userAns: userAnswer,
-      feedback: JsonfeedbackResp?.feedback,
-      rating: JsonfeedbackResp?.rating,
-      userEmail: user?.primaryEmailAddress?.emailAddress,
-      createdAt: moment().format("DD-MM-YYYY"),
-    });
+Interview Question: ${question}
+Expected Answer (Reference): ${correctAnswer}
+Candidate's Answer: ${userAnswer}
 
-    if (resp) {
-      toast("User Answer recorded successfully");
-      setUserAnswer("");
+Provide a detailed evaluation in JSON format with exactly these fields:
+- "rating": A number from 1 to 10 (where 10 is excellent)
+- "feedback": A detailed feedback (3-5 sentences) covering:
+  * What the candidate did well
+  * Areas for improvement
+  * Specific suggestions to enhance the answer
+
+Return ONLY valid JSON in this exact format:
+{
+  "rating": 8,
+  "feedback": "Your answer demonstrates good understanding of the concept. However, you could improve by providing more specific examples..."
+}
+
+Do not include any markdown formatting or text outside the JSON object.`;
+
+    try {
+      console.log("🚀 ~ Generating feedback...");
+      const result = await chatSession.sendMessage(feedbackPrompt, { json: true });
+      const responseText = result.response.text();
+      console.log("🚀 ~ Feedback response:", responseText);
+      
+      // Parse JSON response - handle various formats
+      let JsonfeedbackResp = null;
+      let cleanedText = responseText.trim();
+      
+      // Remove markdown code blocks if present
+      cleanedText = cleanedText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+      
+      // Try to parse the entire response as JSON
+      try {
+        JsonfeedbackResp = JSON.parse(cleanedText);
+      } catch (parseError) {
+        // If that fails, try to extract JSON object using regex
+        const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try {
+            JsonfeedbackResp = JSON.parse(jsonMatch[0]);
+          } catch (regexParseError) {
+            console.error("Failed to parse feedback JSON:", regexParseError);
+            throw new Error("Failed to parse feedback response");
+          }
+        } else {
+          throw new Error("No valid JSON found in feedback response");
+        }
+      }
+      
+      // Validate the response structure
+      if (!JsonfeedbackResp || typeof JsonfeedbackResp.rating !== 'number' || !JsonfeedbackResp.feedback) {
+        throw new Error("Invalid feedback format received");
+      }
+      
+      // Ensure rating is between 1-10
+      const rating = Math.max(1, Math.min(10, Math.round(JsonfeedbackResp.rating)));
+      
+      console.log("🚀 ~ Parsed feedback:", JsonfeedbackResp);
+      
+      const resp = await db.insert(UserAnswer).values({
+        mockIdRef: interviewData?.mockId,
+        question: question,
+        correctAns: correctAnswer,
+        userAns: userAnswer,
+        feedback: JsonfeedbackResp.feedback,
+        rating: rating.toString(),
+        userEmail: user?.primaryEmailAddress?.emailAddress,
+        createdAt: moment().format("DD-MM-YYYY"),
+      });
+
+      if (resp) {
+        toast.success(`Answer recorded! Rating: ${rating}/10`);
+        setUserAnswer("");
+        setResults([]);
+      }
+    } catch (error) {
+      console.error("Error generating feedback:", error);
+      toast.error(`Failed to generate feedback: ${error.message || "Please try again"}`);
+    } finally {
       setResults([]);
+      setLoading(false);
     }
-    setResults([]);
-    setLoading(false);
   };
 
-  if (error) return <p>Web Speech API is not available in this browser 🤷‍</p>;
+  if (error) return <p className="text-red-500 p-4">Web Speech API is not available in this browser 🤷</p>;
+  
   return (
-    <div className="flex justify-cente items-center flex-col">
-      <div className="flex flex-col my-20 justify-center items-center bg-black rounded-lg p-5">
-        <Image
-          src={"/webcam.png"}
-          width={200}
-          height={200}
-          className="absolute"
-          alt="webcam"
-          priority
-        />
-        {/* <Webcam
-          style={{ height: 300, width: "100%", zIndex: 10 }}
-          mirrored={true}
-        /> */}
+    <div className="flex flex-col items-center justify-center h-full">
+      {/* Recording Visual Indicator */}
+      <div className={`flex flex-col items-center justify-center mb-8 p-8 rounded-lg border-2 transition-all ${
+        isRecording 
+          ? 'bg-red-50 border-red-500 animate-pulse' 
+          : loading 
+          ? 'bg-blue-50 border-blue-500' 
+          : 'bg-gray-50 border-gray-300'
+      }`}>
+        <div className={`w-32 h-32 rounded-full flex items-center justify-center mb-4 ${
+          isRecording ? 'bg-red-500' : loading ? 'bg-blue-500' : 'bg-gray-300'
+        }`}>
+          {loading ? (
+            <div className="animate-spin text-white text-4xl">⏳</div>
+          ) : isRecording ? (
+            <Mic className="w-16 h-16 text-white animate-pulse" />
+          ) : (
+            <Mic className="w-16 h-16 text-white" />
+          )}
+        </div>
+        <p className={`font-semibold ${
+          isRecording ? 'text-red-600' : loading ? 'text-blue-600' : 'text-gray-600'
+        }`}>
+          {loading 
+            ? 'Processing your answer...' 
+            : isRecording 
+            ? 'Recording in progress...' 
+            : 'Ready to record'}
+        </p>
       </div>
+
+      {/* Record Button */}
       <Button
         disabled={loading}
-        variant="outline"
-        className="my-10"
+        variant={isRecording ? "destructive" : "default"}
+        size="lg"
+        className={`mb-6 min-w-[200px] ${
+          isRecording 
+            ? 'bg-red-600 hover:bg-red-700' 
+            : 'bg-blue-600 hover:bg-blue-700'
+        }`}
         onClick={StartStopRecording}
       >
         {isRecording ? (
-          <h2 className="text-red-600 items-center animate-pulse flex gap-2">
-            <StopCircle /> Stop Recording...
-          </h2>
+          <span className="flex items-center gap-2">
+            <StopCircle className="w-5 h-5" /> Stop Recording
+          </span>
         ) : (
-          <h2 className="text-primary flex gap-2 items-center">
-            <Mic /> Record Answer
-          </h2>
+          <span className="flex items-center gap-2">
+            <Mic className="w-5 h-5" /> Start Recording
+          </span>
         )}
       </Button>
-      {/* <Button onClick={() => console.log("------", userAnswer)}>
-        Show User Answer
-      </Button> */}
+
+      {/* Current Answer Display */}
+      {userAnswer && (
+        <div className="w-full mt-4 p-4 bg-white border rounded-lg max-h-40 overflow-y-auto">
+          <p className="text-sm font-semibold text-gray-700 mb-2">Your Answer:</p>
+          <p className="text-sm text-gray-600">{userAnswer}</p>
+        </div>
+      )}
+
+      {/* Instructions */}
+      <div className="mt-6 text-center text-sm text-gray-500 max-w-md">
+        <p className="mb-2">💡 <strong>Tip:</strong> Speak clearly and provide detailed answers.</p>
+        <p>Your answer will be automatically saved and evaluated when you stop recording.</p>
+      </div>
     </div>
   );
 };

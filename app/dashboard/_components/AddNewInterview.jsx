@@ -41,46 +41,99 @@ function AddNewInterview() {
     
     setLoading(true);
 
-    const inputPrompt = `Job position: ${jobPosition}, Job Description: ${jobDescription}, Years of Experience: ${jobExperience}, Depends on Job Position, Job Description and Years of Experience give us ${process.env.NEXT_PUBLIC_INTERVIEW_QUESTION_COUNT} Interview question along with Answer in JSON format, Give us question and Answer field on JSON,Each question and answer should be in the format:
+    const questionCount = process.env.NEXT_PUBLIC_INTERVIEW_QUESTION_COUNT || 5;
+    const inputPrompt = `Generate exactly ${questionCount} interview questions for the following job position.
+
+Job Position: ${jobPosition}
+Job Description: ${jobDescription}
+Years of Experience: ${jobExperience}
+
+Return ONLY a valid JSON array with exactly ${questionCount} objects. Each object must have exactly two fields: "question" and "answer".
+Do not include any explanations, markdown formatting, or text outside the JSON array.
+
+Example format:
+[
   {
-    "question": "Your question here",
-    "answer": "Your answer here"
-  }`;
+    "question": "What is your experience with React?",
+    "answer": "React is a JavaScript library for building user interfaces..."
+  },
+  {
+    "question": "How do you handle state management?",
+    "answer": "State management can be handled using React hooks, Context API, or external libraries like Redux..."
+  }
+]
+
+Return the JSON array now:`;
 
     try {
-      const result = await chatSession.sendMessage(inputPrompt);
+      // Request JSON response from Gemini
+      const result = await chatSession.sendMessage(inputPrompt, { json: true });
       const responseText = await result.response.text();
-      console.log("🚀 ~ file: AddNewInterview.jsx:41 ~ onSubmit ~ responseText:", responseText)
-      const jsonMatch = responseText.match(/\[.*?\]/s);
-      if (!jsonMatch) {
-        throw new Error("No valid JSON array found in the response");
+      console.log("🚀 ~ file: AddNewInterview.jsx ~ onSubmit ~ responseText:", responseText);
+      
+      // Parse JSON response - handle various formats
+      let mockResponse = null;
+      let cleanedText = responseText.trim();
+      
+      // Remove markdown code blocks if present
+      cleanedText = cleanedText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+      
+      // Try to find JSON array in the response
+      // First, try to parse the entire response as JSON
+      try {
+        mockResponse = JSON.parse(cleanedText);
+      } catch (parseError) {
+        // If that fails, try to extract JSON array using regex
+        const jsonMatch = cleanedText.match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+          try {
+            mockResponse = JSON.parse(jsonMatch[0]);
+          } catch (regexParseError) {
+            console.error("Failed to parse extracted JSON:", regexParseError);
+            throw new Error("No valid JSON array found in the response");
+          }
+        } else {
+          throw new Error("No valid JSON array found in the response");
+        }
       }
-  
-      const jsonResponsePart = jsonMatch[0];
-      console.log("🚀 ~ file: AddNewInterview.jsx:43 ~ onSubmit ~ jsonResponsePart:", jsonResponsePart);
-  
-      if (jsonResponsePart) {
-        const mockResponse = JSON.parse(jsonResponsePart.trim());
-        console.log("🚀 ~ file: AddNewInterview.jsx:45 ~ onSubmit ~ mockResponse:", mockResponse)
-        setJsonResponse(mockResponse);
-        const jsonString = JSON.stringify(mockResponse);
-        const res = await db.insert(MockInterview)
-          .values({
-            mockId: uuidv4(),
-            jsonMockResp: jsonString,
-            jobPosition: jobPosition,
-            jobDesc: jobDescription,
-            jobExperience: jobExperience,
-            createdBy: user?.primaryEmailAddress?.emailAddress,
-            createdAt: moment().format('DD-MM-YYYY'),
-          }).returning({ mockId: MockInterview.mockId });
-          setLoading(false);
-          toast.success("Interview questions generated successfully!");
-          router.push(`dashboard/interview/${res[0]?.mockId}`);
-      } else {
-        console.error("Error: Unable to extract JSON response");
-        toast.error("Error: Unable to extract JSON response from AI");
+      
+      // Validate the response structure
+      if (!Array.isArray(mockResponse)) {
+        throw new Error("Response is not a JSON array");
       }
+      
+      if (mockResponse.length === 0) {
+        throw new Error("Response array is empty");
+      }
+      
+      // Validate each item has question and answer fields
+      const invalidItems = mockResponse.filter(item => !item.question || !item.answer);
+      if (invalidItems.length > 0) {
+        console.warn("Some items are missing question or answer fields:", invalidItems);
+        // Filter out invalid items instead of failing
+        mockResponse = mockResponse.filter(item => item.question && item.answer);
+      }
+      
+      if (mockResponse.length === 0) {
+        throw new Error("No valid questions found in response");
+      }
+      
+      console.log("🚀 ~ file: AddNewInterview.jsx ~ onSubmit ~ mockResponse:", mockResponse);
+      setJsonResponse(mockResponse);
+      const jsonString = JSON.stringify(mockResponse);
+      const res = await db.insert(MockInterview)
+        .values({
+          mockId: uuidv4(),
+          jsonMockResp: jsonString,
+          jobPosition: jobPosition,
+          jobDesc: jobDescription,
+          jobExperience: jobExperience,
+          createdBy: user?.primaryEmailAddress?.emailAddress,
+          createdAt: moment().format('DD-MM-YYYY'),
+        }).returning({ mockId: MockInterview.mockId });
+        setLoading(false);
+        toast.success("Interview questions generated successfully!");
+        router.push(`dashboard/interview/${res[0]?.mockId}`);
     } catch (error) {
       console.error("Error fetching interview questions:", error);
       let errorMessage = "Failed to generate interview questions. ";

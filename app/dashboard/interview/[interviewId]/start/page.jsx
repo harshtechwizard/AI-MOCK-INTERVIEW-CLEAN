@@ -1,17 +1,19 @@
 "use client";
 import { db } from "@/utils/db";
-import { MockInterview } from "@/utils/schema";
+import { MockInterview, UserAnswer } from "@/utils/schema";
 import { eq } from "drizzle-orm";
 import React, { useEffect, useState } from "react";
 import QuestionsSection from "./_components/QuestionsSection";
 import RecordAnswerSection from "./_components/RecordAnswerSection";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 const StartInterview = ({ params }) => {
   const [interViewData, setInterviewData] = useState();
   const [mockInterviewQuestion, setMockInterviewQuestion] = useState();
   const [activeQuestionIndex, setActiveQuestionIndex] = useState(0);
+  const router = useRouter();
   useEffect(() => {
     GetInterviewDetails();
   }, []);
@@ -20,6 +22,7 @@ const StartInterview = ({ params }) => {
       .select()
       .from(MockInterview)
       .where(eq(MockInterview.mockId, params.interviewId));
+
     const jsonMockResp = JSON.parse(result[0].jsonMockResp);
     console.log(
       "🚀 ~ file: page.jsx:18 ~ GetInterviewDetails ~ jsonMockResp:",
@@ -27,6 +30,22 @@ const StartInterview = ({ params }) => {
     );
     setMockInterviewQuestion(jsonMockResp);
     setInterviewData(result[0]);
+
+    // Check for existing answers
+    const answers = await db
+      .select()
+      .from(UserAnswer)
+      .where(eq(UserAnswer.mockIdRef, params.interviewId));
+
+    if (answers && answers.length > 0) {
+      if (answers.length >= jsonMockResp.length) {
+        // All questions answered, redirect to feedback
+        router.replace(`/dashboard/interview/${params.interviewId}/feedback`);
+      } else {
+        // Resume from next question
+        setActiveQuestionIndex(answers.length);
+      }
+    }
   };
   if (!mockInterviewQuestion || !interViewData) {
     return (
@@ -47,14 +66,14 @@ const StartInterview = ({ params }) => {
       <div className="mb-8">
         <h1 className="text-3xl font-bold mb-2">Mock Interview Session</h1>
         <p className="text-gray-600 mb-4">
-          Position: <strong>{interViewData.jobPosition}</strong> | 
+          Position: <strong>{interViewData.jobPosition}</strong> |
           Experience: <strong>{interViewData.jobExperience} years</strong>
         </p>
-        
+
         {/* Progress Bar */}
         <div className="w-full bg-gray-200 rounded-full h-3 mb-2">
-          <div 
-            className="bg-blue-600 h-3 rounded-full transition-all duration-300" 
+          <div
+            className="bg-blue-600 h-3 rounded-full transition-all duration-300"
             style={{ width: `${progress}%` }}
           ></div>
         </div>
@@ -90,12 +109,12 @@ const StartInterview = ({ params }) => {
           interviewData={interViewData}
         />
       </div>
-      
+
       <div className="flex justify-between items-center mt-8 gap-6">
         <div>
           {activeQuestionIndex > 0 && (
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               onClick={() => setActiveQuestionIndex(activeQuestionIndex - 1)}
             >
               ← Previous Question
@@ -104,7 +123,7 @@ const StartInterview = ({ params }) => {
         </div>
         <div className="flex gap-4">
           {activeQuestionIndex !== mockInterviewQuestion?.length - 1 ? (
-            <Button 
+            <Button
               onClick={() => setActiveQuestionIndex(activeQuestionIndex + 1)}
               className="bg-blue-600 hover:bg-blue-700"
             >

@@ -10,7 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { chatSession } from "@/utils/GeminiAIModal";
+import { chatSession } from "@/utils/AIService";
 import { LoaderCircle } from "lucide-react";
 import { MockInterview } from "@/utils/schema";
 import { v4 as uuidv4 } from 'uuid';
@@ -26,100 +26,113 @@ function AddNewInterview() {
   const [jobDescription, setJobDescription] = useState("");
   const [jobExperience, setJobExperience] = useState("");
   const [loading, setLoading] = useState(false);
-  const [jsonResponse, setJsonResponse] = useState([]);
+  const [loadingMessage, setLoadingMessage] = useState("");
+  const [elapsedTime, setElapsedTime] = useState(0);
   const { user } = useUser();
   const router = useRouter();
 
   const onSubmit = async (e) => {
     e.preventDefault();
-    
-    // Check if Gemini API key is set
-    if (!process.env.NEXT_PUBLIC_GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY === 'your_gemini_api_key_here') {
-      toast.error("Please set your Gemini API key in .env.local file");
-      return;
-    }
-    
     setLoading(true);
+    setElapsedTime(0);
+    setLoadingMessage("🤖 Ollama AI is thinking...");
+
+    // Notify user about wait time
+    toast.info("⏳ Using local Ollama AI", {
+      description: "This may take 30-60 seconds. Please be patient!",
+      duration: 5000,
+    });
+
+    // Start timer to show progress (Ollama takes ~50 seconds)
+    const timer = setInterval(() => {
+      setElapsedTime(prev => prev + 1);
+    }, 1000);
 
     const questionCount = process.env.NEXT_PUBLIC_INTERVIEW_QUESTION_COUNT || 5;
-    const inputPrompt = `Generate exactly ${questionCount} interview questions for the following job position.
+    const inputPrompt = `Generate ${questionCount} interview questions for: ${jobPosition} with ${jobExperience} years experience in ${jobDescription}.
 
-Job Position: ${jobPosition}
-Job Description: ${jobDescription}
-Years of Experience: ${jobExperience}
+Return ONLY valid JSON array. No markdown, no explanations. Keep answers under 100 words.
 
-Return ONLY a valid JSON array with exactly ${questionCount} objects. Each object must have exactly two fields: "question" and "answer".
-Do not include any explanations, markdown formatting, or text outside the JSON array.
+Example: [{"question":"Q1 text","answer":"A1 text"},{"question":"Q2 text","answer":"A2 text"}]
 
-Example format:
-[
-  {
-    "question": "What is your experience with React?",
-    "answer": "React is a JavaScript library for building user interfaces..."
-  },
-  {
-    "question": "How do you handle state management?",
-    "answer": "State management can be handled using React hooks, Context API, or external libraries like Redux..."
-  }
-]
-
-Return the JSON array now:`;
+JSON array:`;
 
     try {
-      // Request JSON response from Gemini
+      // Request JSON response from Gemini with rate limiting
+      console.log("📤 Sending request to Gemini API...");
       const result = await chatSession.sendMessage(inputPrompt, { json: true });
       const responseText = await result.response.text();
-      console.log("🚀 ~ file: AddNewInterview.jsx ~ onSubmit ~ responseText:", responseText);
-      
-      // Parse JSON response - handle various formats
+      console.log("✅ Received response from Gemini");
+
+      // Parse JSON response with multiple cleaning strategies
       let mockResponse = null;
       let cleanedText = responseText.trim();
-      
-      // Remove markdown code blocks if present
-      cleanedText = cleanedText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-      
-      // Try to find JSON array in the response
-      // First, try to parse the entire response as JSON
+
+      // Strategy 1: Extract JSON array first
+      const jsonMatch = cleanedText.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        cleanedText = jsonMatch[0];
+      }
+
+      // Strategy 2: Clean the text thoroughly
+      cleanedText = cleanedText
+        .replace(/```json\n?/g, '').replace(/```\n?/g, '')  // Remove markdown
+        .replace(/[\x00-\x1F\x7F-\x9F]/g, '')               // Remove all control chars
+        .replace(/\n/g, ' ').replace(/\r/g, ' ')            // Remove newlines
+        .replace(/\t/g, ' ')                                 // Remove tabs
+        .replace(/\s+/g, ' ')                                // Collapse spaces
+        .replace(/,\s*}/g, '}')                              // Fix trailing commas
+        .replace(/,\s*]/g, ']')                              // Fix trailing commas
+        .replace(/}\s*{/g, '},{')                            // Fix missing commas
+        .trim();
+
+      console.log('🧹 Cleaned text:', cleanedText.substring(0, 200) + '...');
+
+      // Strategy 3: Try parsing with multiple attempts
       try {
         mockResponse = JSON.parse(cleanedText);
       } catch (parseError) {
-        // If that fails, try to extract JSON array using regex
-        const jsonMatch = cleanedText.match(/\[[\s\S]*\]/);
-        if (jsonMatch) {
-          try {
-            mockResponse = JSON.parse(jsonMatch[0]);
-          } catch (regexParseError) {
-            console.error("Failed to parse extracted JSON:", regexParseError);
-            throw new Error("No valid JSON array found in the response");
+        console.log('⚠️ First parse failed, trying alternative methods...');
+        
+        // Try to fix common JSON issues
+        try {
+          // Fix unescaped quotes in strings
+          let fixed = cleanedText.replace(/([^\\])"([^"]*)"([^:])/g, '$1\\"$2\\"$3');
+          mockResponse = JSON.parse(fixed);
+        } catch (e2) {
+          // Last resort: try to extract and rebuild JSON
+          const questionMatches = cleanedText.match(/"question"\s*:\s*"([^"]+)"/g);
+          const answerMatches = cleanedText.match(/"answer"\s*:\s*"([^"]+)"/g);
+          
+          if (questionMatches && answerMatches && questionMatches.length === answerMatches.length) {
+            mockResponse = [];
+            for (let i = 0; i < questionMatches.length; i++) {
+              const question = questionMatches[i].match(/"question"\s*:\s*"([^"]+)"/)[1];
+              const answer = answerMatches[i].match(/"answer"\s*:\s*"([^"]+)"/)[1];
+              mockResponse.push({ question, answer });
+            }
+          } else {
+            throw new Error("Could not parse JSON response: " + parseError.message);
           }
-        } else {
-          throw new Error("No valid JSON array found in the response");
         }
       }
-      
-      // Validate the response structure
-      if (!Array.isArray(mockResponse)) {
-        throw new Error("Response is not a JSON array");
+
+      // Validate response
+      if (!Array.isArray(mockResponse) || mockResponse.length === 0) {
+        throw new Error("Invalid response format");
       }
-      
+
+      // Filter out invalid items
+      mockResponse = mockResponse.filter(item => item.question && item.answer);
+
       if (mockResponse.length === 0) {
-        throw new Error("Response array is empty");
+        throw new Error("No valid questions in response");
       }
-      
-      // Validate each item has question and answer fields
-      const invalidItems = mockResponse.filter(item => !item.question || !item.answer);
-      if (invalidItems.length > 0) {
-        console.warn("Some items are missing question or answer fields:", invalidItems);
-        // Filter out invalid items instead of failing
-        mockResponse = mockResponse.filter(item => item.question && item.answer);
-      }
-      
-      if (mockResponse.length === 0) {
-        throw new Error("No valid questions found in response");
-      }
-      
-      console.log("🚀 ~ file: AddNewInterview.jsx ~ onSubmit ~ mockResponse:", mockResponse);
-      setJsonResponse(mockResponse);
+
+      console.log(`✅ Parsed ${mockResponse.length} questions successfully`);
+
+      // Save to database
+      setLoadingMessage("Saving interview...");
       const jsonString = JSON.stringify(mockResponse);
       const res = await db.insert(MockInterview)
         .values({
@@ -131,25 +144,89 @@ Return the JSON array now:`;
           createdBy: user?.primaryEmailAddress?.emailAddress,
           createdAt: moment().format('DD-MM-YYYY'),
         }).returning({ mockId: MockInterview.mockId });
-        setLoading(false);
-        toast.success("Interview questions generated successfully!");
-        router.push(`dashboard/interview/${res[0]?.mockId}`);
+
+      clearInterval(timer);
+      setLoading(false);
+      toast.success("Interview questions generated successfully! 🎉");
+      router.push(`dashboard/interview/${res[0]?.mockId}`);
+
     } catch (error) {
-      console.error("Error fetching interview questions:", error);
-      let errorMessage = "Failed to generate interview questions. ";
-      
-      if (error.message?.includes("API_KEY")) {
-        errorMessage += "Please check your Gemini API key.";
-      } else if (error.message?.includes("quota") || error.message?.includes("limit")) {
-        errorMessage += "API quota exceeded. Please try again later.";
-      } else if (error.message?.includes("JSON")) {
-        errorMessage += "AI response format error. Please try again.";
+      clearInterval(timer);
+      console.error("❌ Error generating questions:", error);
+
+      const errorMsg = error.message || "";
+      let useFallback = false;
+      let userMessage = "Failed to generate questions. ";
+
+      // Handle specific error types
+      if (errorMsg.includes("GEMINI_QUOTA_EXCEEDED")) {
+        userMessage = "⚠️ API quota exceeded. Using sample questions...";
+        useFallback = true;
+        toast.warning("API Limit Reached", {
+          description: "You've hit the free tier limit. Using sample questions for now.",
+          duration: 6000,
+        });
+      } else if (errorMsg.includes("GEMINI_API_KEY_INVALID") || errorMsg.includes("GEMINI_API_KEY_MISSING")) {
+        userMessage = "⚠️ API key issue. Using sample questions...";
+        useFallback = true;
+        toast.error("API Key Issue", {
+          description: "Please check your Gemini API key in .env.local",
+          duration: 6000,
+        });
+        console.log("\n🔧 Get a new API key at: https://aistudio.google.com/app/apikey\n");
+      } else if (errorMsg.includes("GEMINI_MODEL_NOT_FOUND")) {
+        userMessage = "⚠️ Model not available. Using sample questions...";
+        useFallback = true;
+        toast.error("Model Not Available", {
+          description: "The Gemini model is not accessible with your API key.",
+          duration: 6000,
+        });
+      } else if (errorMsg.includes("quota") || errorMsg.includes("429")) {
+        userMessage = "⚠️ Too many requests. Using sample questions...";
+        useFallback = true;
       } else {
-        errorMessage += error.message || "Please try again.";
+        userMessage += errorMsg.substring(0, 100);
       }
-      
-      toast.error(errorMessage);
-    } finally {
+
+      // Use fallback if appropriate
+      if (useFallback) {
+        try {
+          setLoadingMessage("Generating sample questions...");
+          console.log("📝 Using fallback questions...");
+
+          const fallbackQuestions = generateFallbackQuestions(
+            jobPosition,
+            jobDescription,
+            jobExperience,
+            questionCount
+          );
+
+          const jsonString = JSON.stringify(fallbackQuestions);
+          const res = await db.insert(MockInterview)
+            .values({
+              mockId: uuidv4(),
+              jsonMockResp: jsonString,
+              jobPosition: jobPosition,
+              jobDesc: jobDescription,
+              jobExperience: jobExperience,
+              createdBy: user?.primaryEmailAddress?.emailAddress,
+              createdAt: moment().format('DD-MM-YYYY'),
+            }).returning({ mockId: MockInterview.mockId });
+
+          clearInterval(timer);
+          setLoading(false);
+          toast.success("Interview created with sample questions");
+          router.push(`dashboard/interview/${res[0]?.mockId}`);
+          return;
+        } catch (fallbackError) {
+          clearInterval(timer);
+          console.error("❌ Fallback failed:", fallbackError);
+          userMessage += " Fallback also failed.";
+        }
+      }
+
+      clearInterval(timer);
+      toast.error(userMessage);
       setLoading(false);
     }
   };
@@ -197,7 +274,7 @@ Return the JSON array now:`;
                   <Input
                     placeholder="Ex. 5"
                     type="number"
-                    min="1"
+                    min="0"
                     max="70"
                     required
                     onChange={(e) => setJobExperience(e.target.value)}
@@ -210,9 +287,15 @@ Return the JSON array now:`;
                 </Button>
                 <Button type="submit" disabled={loading}>
                   {loading ? (
-                    <>
-                      <LoaderCircle className="animate-spin" /> Generating from AI
-                    </>
+                    <div className="flex flex-col items-center">
+                      <div className="flex items-center">
+                        <LoaderCircle className="animate-spin mr-2" />
+                        {loadingMessage || "Generating..."}
+                      </div>
+                      <span className="text-xs mt-1">
+                        {elapsedTime}s elapsed (Ollama takes ~50s)
+                      </span>
+                    </div>
                   ) : (
                     'Start Interview'
                   )}

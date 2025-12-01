@@ -2,23 +2,60 @@ This is a [Next.js](https://nextjs.org/) project bootstrapped with [`create-next
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
+- Node.js 18+ installed
+- Ollama installed and running (for local AI)
 
+### Installation
+
+1. **Install dependencies:**
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+2. **Set up database:**
+```bash
+npm run db:push
+```
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+3. **Configure environment variables:**
+The `.env.local` file is already configured with:
+- Clerk authentication (working)
+- Database connection (working)
+- Ollama AI (local, free) ✅
 
-This project uses [`next/font`](https://nextjs.org/docs/basic-features/font-optimization) to automatically optimize and load Inter, a custom Google Font.
+4. **Ensure Ollama is running:**
+```bash
+ollama serve
+```
+
+5. **Run the development server:**
+```bash
+npm run dev
+```
+
+6. **Open the application:**
+Open [http://localhost:3000](http://localhost:3000) with your browser.
+
+## AI Configuration
+
+This project uses **Ollama with Phi-3 Mini** for local AI processing (no API key needed!).
+
+See [AI_SETUP.md](./AI_SETUP.md) for detailed configuration options.
+
+### Quick Test:
+```bash
+node utils/testAI.js
+```
+
+## Features
+
+- 🤖 **AI-Powered Interview Questions** - Generated locally using Ollama
+- 🎤 **Speech-to-Text** - Voice recognition for natural responses
+- 📊 **Instant Feedback** - AI analysis with ratings and suggestions
+- 📝 **Interview History** - Track your progress over time
+- 🔐 **Secure Authentication** - Powered by Clerk
+- 💾 **Database Storage** - PostgreSQL with Drizzle ORM
 
 ## Learn More
 
